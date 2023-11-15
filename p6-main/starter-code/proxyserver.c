@@ -9,10 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "safequeue.h"
+
 
 #include "proxyserver.h"
 
@@ -33,6 +36,14 @@ int num_workers;
 char *fileserver_ipaddr;
 int fileserver_port;
 int max_queue_size;
+
+SafeQueue * pq = NULL; 
+
+// syncronization variables 
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t empty = PTHREAD_COND_INITIALIZER;
+pthread_cond_t fill = PTHREAD_COND_INITIALIZER;
 
 // a struct for the thread data 
 struct ThreadData {
@@ -55,6 +66,14 @@ void send_error_response(int client_fd, status_code_t err_code, char *err_msg) {
  * forward the fileserver response to the client
  */
 void serve_request(int client_fd) {
+
+
+    // this is the consumer
+
+    printf("made it here\n"); 
+
+    // need to pop the next element off the queue
+
 
     // create a fileserver socket
     int fileserver_fd = socket(PF_INET, SOCK_STREAM, 0);
@@ -118,6 +137,9 @@ int server_fd; // this is a file descriptor for the server_fd
  * connection, calls request_handler with the accepted fd number.
  */
 void serve_forever(int *server_fd) {
+    // this is the producer thread
+
+    struct http_request *rec = NULL; 
 
     // create a socket to listen
     *server_fd = socket(PF_INET, SOCK_STREAM, 0); // 
@@ -175,7 +197,53 @@ void serve_forever(int *server_fd) {
                inet_ntoa(client_address.sin_addr),
                client_address.sin_port);
 
-        serve_request(client_fd);
+        // add the request to the pq 
+        // char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
+
+        // // forward the client request to the fileserver
+        // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
+
+        // if (bytes_read > 0) {
+        // // Print the client's request line by line
+        // printf("Client's Request:\n");
+        // int i;
+        // for (i = 0; i < bytes_read; ++i) {
+        //     // Print each character until a newline character is encountered
+        //     if (buffer[i] != '\n') {
+        //         putchar(buffer[i]);
+        //     } else {
+        //         // If a newline character is encountered, print a newline
+        //         putchar('\n');
+        //     }
+        // }
+        //     printf("End of Client's Request\n");
+        // }
+
+        char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
+
+        // forward the client request to the fileserver
+        // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
+        recv(client_fd, buffer, RESPONSE_BUFSIZE, MSG_PEEK); 
+        
+        rec = http_request_parse(client_fd); 
+
+        printf("The path is %s\n", rec->path); 
+        printf("The method is %s\n", rec->method); 
+        printf("The delay is %s\n", rec->delay); 
+
+        // need to parse all this data and get it onto the pq 
+        // GET /1/dummy1.html HTTP/1.1
+        // Host: localhost:33489
+        // User-Agent: curl/7.81.0
+        // Accept: */*
+        //TODO: need to add the client FD to the pq as well
+        add_work(pq, rec->path, client_fd); // adding the work to the buffer
+
+        // after adding work we need to A
+        // Is this where I want to start my listeners 
+
+        // need to signal the listening threads 
+        //serve_request(client_fd);
 
         // close the connection to the client
         shutdown(client_fd, SHUT_WR);
@@ -232,9 +300,34 @@ void exit_with_usage() {
 }
 
 // a method to create a thread 
-void* thread_function(void* arg) {
+void* listener_call(void* arg) {
     struct ThreadData* thread_data = (struct ThreadData*)arg;
+
+    // this is like our producer consumer model
     serve_forever(&(thread_data->server_fd));
+
+    return NULL;
+}
+void* worker_call(void* arg) {
+    SafeQueue* queue = (SafeQueue*)arg;
+
+    while (1) {  // You might want a mechanism to break out of this loop
+        QueueNode node = get_work(queue);
+
+        printf("the request path from get work is %s\n", node.request_path); 
+
+        if (node.request_path != NULL) {
+            // Process the request using serve_request
+            serve_request(node.client_fd);  // Assuming serve_request takes a client_fd
+
+            // If node.request_path is dynamically allocated, remember to free it
+            free(node.request_path);
+        }
+
+        // Check for a shutdown condition here
+        // If shutdown, break out of the loop
+    }
+
     return NULL;
 }
 
@@ -267,32 +360,52 @@ int main(int argc, char **argv) {
             exit_with_usage();
         }
     }
+
     print_settings();
+    // this is where we create the priority queue 
+    pq = create_queue(max_queue_size); 
+    
+
 
     // create the thread IDs
-    pthread_t* thread_ids = (pthread_t*)malloc(num_listener * sizeof(pthread_t)); // create as many threadIDs as we need
+    pthread_t* listener_ids = (pthread_t*)malloc(num_listener * sizeof(pthread_t)); // create as many threadIDs as we need
 
     for (int j = 0; j < num_listener; j++) {
         struct ThreadData* thread_data = (struct ThreadData*)malloc(sizeof(struct ThreadData)); // create a theadData struct
-        thread_data->listener_port = listener_ports[j]; // each listener has its own port
         thread_data->server_fd = -1;
 
         // Create the thread
-        if (pthread_create(&thread_ids[j], NULL, thread_function, (void*)thread_data) != 0) { // creates a thread for each listener
+        if (pthread_create(&listener_ids[j], NULL, listener_call, (void*)thread_data) != 0) { // creates a thread for each listener
             perror("Failed to create thread");
             exit(EXIT_FAILURE);
         }
     }
-    // wait for all the listenerers to finish
-    for (int j = 0; j < num_listener; j++) {
-        if (pthread_join(thread_ids[j], NULL) != 0) {
-            perror("Failed to join thread");
+
+    //Now create the workers
+    pthread_t* worker_ids = (pthread_t*)malloc(num_listener * sizeof(pthread_t)); // create as many threadIDs as we need
+    for (int j = 0; j < num_workers; j++) {
+        if (pthread_create(&worker_ids[j], NULL, worker_call, (void *)pq) != 0) { 
+            perror("Failed to create thread");
             exit(EXIT_FAILURE);
         }
     }
 
+
+    // wait for all the listenerers to finish
+    for (int j = 0; j < num_listener; j++) {
+        if (pthread_join(listener_ids[j], NULL) != 0) {
+            perror("Failed to join thread");
+            exit(EXIT_FAILURE);
+        }
+    }
+    
+    // wait for all num_workers
+    for (int i = 0; i < num_workers; i++) {
+        pthread_join(worker_ids[i], NULL);
+    }
+
     // Clean up resources
-    free(thread_ids);
+    free(listener_ids);
 
 
     return EXIT_SUCCESS;

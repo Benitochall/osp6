@@ -1,6 +1,7 @@
 #include "safequeue.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 // Helper function to swap two nodes
 void swap(QueueNode *a, QueueNode *b)
@@ -57,8 +58,10 @@ int extract_priority(const char *path)
 }
 
 // Function to add work to the queue (heap)
-void add_work(SafeQueue *queue, const char *request_path)
+void add_work(SafeQueue *queue, const char *request_path, int client_fd)
 {
+    printf("inside add work request path is %s\n", request_path); 
+    printf("client fd is %d\n", client_fd); 
     pthread_mutex_lock(&queue->mutex);
 
     if (queue->size >= queue->capacity)
@@ -75,6 +78,7 @@ void add_work(SafeQueue *queue, const char *request_path)
     QueueNode node;
     node.request_path = strdup(request_path); // Allocate and copy the path
     node.priority = extract_priority(request_path);
+    node.client_fd = client_fd; 
 
     // Add new node at the end of the heap
     queue->nodes[queue->size] = node;
