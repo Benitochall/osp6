@@ -65,7 +65,7 @@ void send_error_response(int client_fd, status_code_t err_code, char *err_msg) {
  * forward the client request to the fileserver and
  * forward the fileserver response to the client
  */
-void serve_request(int client_fd) {
+void serve_request(int client_fd, char * buffer) {
 
 
     // this is the consumer
@@ -99,10 +99,13 @@ void serve_request(int client_fd) {
     }
 
     // successfully connected to the file server
-    char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
+    //char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
 
     // forward the client request to the fileserver
-    int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
+    // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
+
+    int bytes_read = strlen(buffer); 
+
     int ret = http_send_data(fileserver_fd, buffer, bytes_read);
     if (ret < 0) {
         printf("Failed to send request to the file server\n");
@@ -126,10 +129,36 @@ void serve_request(int client_fd) {
     close(fileserver_fd);
 
     // Free resources and exit
+    printf("are we exiting the function\n"); 
+
     free(buffer);
 }
 
+void handle_get_job_request(int client_fd, SafeQueue* queue) {
+    QueueNode node = get_work_nonblocking(queue);
 
+    // printf("node: %d\n", node.client_fd); 
+
+    if (get_size(queue) == 0) {
+        // The queue is empty, send an error response
+        printf("here we made it");
+        http_start_response(client_fd, QUEUE_EMPTY);  // Replace YOUR_ERROR_CODE with the appropriate code
+    } else {
+        printf("inside else");
+        // Queue is not empty, send the job's path back to the client
+        char header[strlen(node.buffer)];
+        sprintf(header, 
+            "HTTP/1.0 200 OK\r\n"
+            "%s\r\n"
+            "\r\n",
+            node.request_path);
+
+        send(client_fd, header, strlen(header), 0);
+        send(client_fd, node.request_path, strlen(node.request_path), 0);
+
+        free(node.request_path); // Remember to free the dynamically allocated path
+    }
+}
 int server_fd; // this is a file descriptor for the server_fd
 /*
  * opens a TCP stream socket on all interfaces with port number PORTNO. Saves
@@ -219,31 +248,40 @@ void serve_forever(int *server_fd) {
         //     printf("End of Client's Request\n");
         // }
 
-        char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
+        char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char)); // create a buffer
 
         // forward the client request to the fileserver
         // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
-        recv(client_fd, buffer, RESPONSE_BUFSIZE, MSG_PEEK); 
-        
-        rec = http_request_parse(client_fd); 
+        int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE); // opens the server and reads the buffer
+        printf("the number of bytes read %d\n", bytes_read);
+
+       // buffer[bytes_read] = '\0'; /* Always null-terminate. */
+
+        if (bytes_read < 0){ // check to see if read failed
+            printf("reading bytes failed\n"); 
+            exit(1); 
+        }
+
+        rec = http_request_parse(buffer);  // this should parse the data for us 
+
+        // need to parse the buffer to get the path, the method and the delay
+        //
 
         printf("The path is %s\n", rec->path); 
-        printf("The method is %s\n", rec->method); 
         printf("The delay is %s\n", rec->delay); 
 
-        // need to parse all this data and get it onto the pq 
-        // GET /1/dummy1.html HTTP/1.1
-        // Host: localhost:33489
-        // User-Agent: curl/7.81.0
-        // Accept: */*
-        //TODO: need to add the client FD to the pq as well
-        add_work(pq, rec->path, client_fd); // adding the work to the buffer
+        if (strcmp(rec->path, "/GetJob") == 0) {
+        // This is a GetJob request
+        // Call a function to handle this specific request
+            printf("are we here");
+            handle_get_job_request(client_fd, pq); // Assuming myQueue is your priority queue
+        }
+        else {
+            printf("are we here");
+            add_work(pq, rec->path, client_fd, buffer);
 
-        // after adding work we need to A
-        // Is this where I want to start my listeners 
+        }
 
-        // need to signal the listening threads 
-        //serve_request(client_fd);
 
         // close the connection to the client
         shutdown(client_fd, SHUT_WR);
@@ -318,7 +356,7 @@ void* worker_call(void* arg) {
 
         if (node.request_path != NULL) {
             // Process the request using serve_request
-            serve_request(node.client_fd);  // Assuming serve_request takes a client_fd
+            serve_request(node.client_fd, node.buffer);  // Assuming serve_request takes a client_fd
 
             // If node.request_path is dynamically allocated, remember to free it
             free(node.request_path);

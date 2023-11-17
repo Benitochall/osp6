@@ -53,6 +53,9 @@ int http_send_data(int fd, char *data, size_t size);
 char *http_get_response_message(int status_code);
 
 void http_start_response(int fd, int status_code) {
+    printf("response\n");
+    printf("HTTP/1.0 %d %s\r\n", status_code,
+            http_get_response_message(status_code)); 
     dprintf(fd, "HTTP/1.0 %d %s\r\n", status_code,
             http_get_response_message(status_code));
 }
@@ -88,22 +91,23 @@ void http_fatal_error(char *message) {
 
 #define LIBHTTP_REQUEST_MAX_SIZE 8192
 
-struct http_request *http_request_parse(int fd) {
+struct http_request *http_request_parse(char * buffer) {
+    // this comes in as a buffer
     struct http_request *request = malloc(sizeof(struct http_request));
     if (!request) http_fatal_error("Malloc failed");
 
-    char *read_buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
-    if (!read_buffer) http_fatal_error("Malloc failed");
+    //char *read_buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
+    //if (!read_buffer) http_fatal_error("Malloc failed");
 
-    int bytes_read = read(fd, read_buffer, LIBHTTP_REQUEST_MAX_SIZE);
-    read_buffer[bytes_read] = '\0'; /* Always null-terminate. */
+    //int bytes_read = read(fd, read_buffer, LIBHTTP_REQUEST_MAX_SIZE);
+    //read_buffer[bytes_read] = '\0'; /* Always null-terminate. */
 
     char *read_start, *read_end;
     size_t read_size;
 
     do {
         /* Read in the HTTP method: "[A-Z]*" */
-        read_start = read_end = read_buffer;
+        read_start = read_end = buffer;
         while (*read_end >= 'A' && *read_end <= 'Z') {
             printf("%c", *read_end);
             read_end++;
@@ -138,13 +142,13 @@ struct http_request *http_request_parse(int fd) {
         if (*read_end != '\n') break;
         read_end++;
 
-        free(read_buffer);
+        //free(read_buffer);
         return request;
     } while (0);
 
     /* An error occurred. */
     free(request);
-    free(read_buffer);
+    //free(read_buffer);
     return NULL;
 }
 
@@ -171,6 +175,7 @@ char *http_get_response_message(int status_code) {
     case 405:
         return "Method Not Allowed";
     default:
+        printf("response2\n");
         return "Internal Server Error";
     }
 }
