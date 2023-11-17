@@ -8,6 +8,7 @@ typedef struct {
     char* request_path; // Assuming request path is a string
     int priority;       // Priority of the request
     int client_fd;      // client fd
+    char * buffer; // the buffer
 } QueueNode;
 
 // Define the struct for the priority queue.
@@ -21,10 +22,11 @@ typedef struct {
 
 // Function declarations.
 SafeQueue* create_queue(int capacity);
-void add_work(SafeQueue* queue, const char* request_path, int client_fd);
+void add_work(SafeQueue* queue, const char* request_path, int client_fd, char * buffer);
 QueueNode get_work(SafeQueue* queue);
 QueueNode get_work_nonblocking(SafeQueue* queue);
 void destroy_queue(SafeQueue* queue); // For cleanup
+int get_size(SafeQueue *queue);
 
 // Function to extract priority from the request path
 int extract_priority(const char* path);

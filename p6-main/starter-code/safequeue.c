@@ -58,10 +58,24 @@ int extract_priority(const char *path)
 }
 
 // Function to add work to the queue (heap)
-void add_work(SafeQueue *queue, const char *request_path, int client_fd)
+void add_work(SafeQueue *queue, const char *request_path, int client_fd, char * buffer)
 {
     printf("inside add work request path is %s\n", request_path); 
     printf("client fd is %d\n", client_fd); 
+    printf("Client's Request in add work:\n");
+    int i;
+    for (i = 0; i < strlen(buffer); ++i) {
+        // Print each character until a newline character is encountered
+        if (buffer[i] != '\n') {
+            putchar(buffer[i]);
+        } else {
+            // If a newline character is encountered, print a newline
+            putchar('\n');
+        }
+    }
+    printf("End of Client's Request in add work\n");
+
+
     pthread_mutex_lock(&queue->mutex);
 
     if (queue->size >= queue->capacity)
@@ -77,6 +91,7 @@ void add_work(SafeQueue *queue, const char *request_path, int client_fd)
     // Create a new QueueNode with extracted priority
     QueueNode node;
     node.request_path = strdup(request_path); // Allocate and copy the path
+    node.buffer = strdup(buffer); // add the buffer to the node
     node.priority = extract_priority(request_path);
     node.client_fd = client_fd; 
 
@@ -151,7 +166,7 @@ QueueNode get_work_nonblocking(SafeQueue *queue)
     if (queue->size == 0)
     {
         pthread_mutex_unlock(&queue->mutex);
-        return (QueueNode){NULL, -1}; // Return an empty node to indicate queue is empty
+        return (QueueNode){ .client_fd = -1 }; // Return an empty node to indicate queue is empty
     }
 
     QueueNode node = queue->nodes[0];
@@ -204,4 +219,7 @@ void destroy_queue(SafeQueue *queue)
         pthread_cond_destroy(&queue->cond);
         free(queue);
     }
+}
+int get_size(SafeQueue *queue){
+    return queue->size; 
 }
