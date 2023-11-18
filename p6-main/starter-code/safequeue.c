@@ -58,22 +58,28 @@ int extract_priority(const char *path)
 }
 
 // Function to add work to the queue (heap)
-void add_work(SafeQueue *queue, const char *request_path, int client_fd, char * buffer)
+int add_work(SafeQueue *queue, const char *request_path, int client_fd, char * buffer, int priority, int delay)
 {
-    printf("inside add work request path is %s\n", request_path); 
-    printf("client fd is %d\n", client_fd); 
-    printf("Client's Request in add work:\n");
-    int i;
-    for (i = 0; i < strlen(buffer); ++i) {
-        // Print each character until a newline character is encountered
-        if (buffer[i] != '\n') {
-            putchar(buffer[i]);
-        } else {
-            // If a newline character is encountered, print a newline
-            putchar('\n');
-        }
-    }
-    printf("End of Client's Request in add work\n");
+    printf("Going into add work\n"); 
+    printf("In add work requestPath is %s\n", request_path); 
+    printf("In add work fd is %d\n", client_fd); 
+    printf("In add work buffer len is %ld\n", strlen(buffer)); 
+    printf("In add work priority is %d\n", priority); 
+    printf("In add work delay is %d\n", delay); 
+    printf("---------------\n"); 
+    // printf("client fd is %d\n", client_fd); 
+    // printf("Client's Request in add work:\n");
+    // int i;
+    // for (i = 0; i < strlen(buffer); ++i) {
+    //     // Print each character until a newline character is encountered
+    //     if (buffer[i] != '\n') {
+    //         putchar(buffer[i]);
+    //     } else {
+    //         // If a newline character is encountered, print a newline
+    //         putchar('\n');
+    //     }
+    // }
+    // printf("End of Client's Request in add work\n");
 
 
     pthread_mutex_lock(&queue->mutex);
@@ -84,7 +90,7 @@ void add_work(SafeQueue *queue, const char *request_path, int client_fd, char * 
         {
             // Handle the failure to resize
             pthread_mutex_unlock(&queue->mutex);
-            return;
+            return -1;
         }
     }
 
@@ -92,8 +98,9 @@ void add_work(SafeQueue *queue, const char *request_path, int client_fd, char * 
     QueueNode node;
     node.request_path = strdup(request_path); // Allocate and copy the path
     node.buffer = strdup(buffer); // add the buffer to the node
-    node.priority = extract_priority(request_path);
+    node.priority = priority; 
     node.client_fd = client_fd; 
+    node.delay = delay;
 
     // Add new node at the end of the heap
     queue->nodes[queue->size] = node;
@@ -109,6 +116,7 @@ void add_work(SafeQueue *queue, const char *request_path, int client_fd, char * 
     queue->size++;
     pthread_cond_signal(&queue->cond); // Signal any waiting worker threads
     pthread_mutex_unlock(&queue->mutex);
+    return 1; 
 }
 
 // Function to get the highest priority work (heap root). Is used when a thread can afford to wait for work to become available. This is common in worker threads that have nothing else to do but process requests.
