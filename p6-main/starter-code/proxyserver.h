@@ -1,4 +1,3 @@
-
 #ifndef PROXYSERVER_H
 #define PROXYSERVER_H
 
@@ -39,8 +38,23 @@ typedef enum scode {
 struct http_request {
     char *method;
     char *path;
-    char *delay;
+    char *delay; 
 };
+
+struct http_client_request {
+    char *path;
+    int delay;
+    int fd; 
+    char *buffer;  
+    int priority; 
+};
+
+struct ThreadListener{
+    int listener_port;
+    int server_fd;
+    int thread_id; 
+};
+
 
 /*
  * Functions for sending an HTTP response.
@@ -53,9 +67,6 @@ int http_send_data(int fd, char *data, size_t size);
 char *http_get_response_message(int status_code);
 
 void http_start_response(int fd, int status_code) {
-    printf("response\n");
-    printf("HTTP/1.0 %d %s\r\n", status_code,
-            http_get_response_message(status_code)); 
     dprintf(fd, "HTTP/1.0 %d %s\r\n", status_code,
             http_get_response_message(status_code));
 }
@@ -91,23 +102,22 @@ void http_fatal_error(char *message) {
 
 #define LIBHTTP_REQUEST_MAX_SIZE 8192
 
-struct http_request *http_request_parse(char * buffer) {
-    // this comes in as a buffer
+struct http_request *http_request_parse(int fd) {
     struct http_request *request = malloc(sizeof(struct http_request));
     if (!request) http_fatal_error("Malloc failed");
 
-    //char *read_buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
-    //if (!read_buffer) http_fatal_error("Malloc failed");
+    char *read_buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
+    if (!read_buffer) http_fatal_error("Malloc failed");
 
-    //int bytes_read = read(fd, read_buffer, LIBHTTP_REQUEST_MAX_SIZE);
-    //read_buffer[bytes_read] = '\0'; /* Always null-terminate. */
+    int bytes_read = read(fd, read_buffer, LIBHTTP_REQUEST_MAX_SIZE);
+    read_buffer[bytes_read] = '\0'; /* Always null-terminate. */
 
     char *read_start, *read_end;
     size_t read_size;
 
     do {
         /* Read in the HTTP method: "[A-Z]*" */
-        read_start = read_end = buffer;
+        read_start = read_end = read_buffer;
         while (*read_end >= 'A' && *read_end <= 'Z') {
             printf("%c", *read_end);
             read_end++;
@@ -142,13 +152,13 @@ struct http_request *http_request_parse(char * buffer) {
         if (*read_end != '\n') break;
         read_end++;
 
-        //free(read_buffer);
+        free(read_buffer);
         return request;
     } while (0);
 
     /* An error occurred. */
     free(request);
-    //free(read_buffer);
+    free(read_buffer);
     return NULL;
 }
 
@@ -175,10 +185,78 @@ char *http_get_response_message(int status_code) {
     case 405:
         return "Method Not Allowed";
     default:
-        printf("response2\n");
         return "Internal Server Error";
     }
 }
 
+struct http_client_request *parse_client_request(int fd) {
+
+    struct http_client_request *request = malloc(sizeof(struct http_client_request));
+
+    char *read_buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
+    char *buffer = malloc(LIBHTTP_REQUEST_MAX_SIZE + 1);
+    if (!read_buffer) http_fatal_error("Malloc failed");
+
+    int bytes_read = read(fd, read_buffer, LIBHTTP_REQUEST_MAX_SIZE);
+
+    read_buffer[bytes_read] = '\0'; /* Always null-terminate. */
+    buffer = strdup(read_buffer); 
+
+
+    int delay = -1;
+    int priority = -1;
+    char *path = NULL;
+
+    int is_first = 1;
+    size_t size;
+
+    char *token = strtok(read_buffer, "\r\n");
+    while (token != NULL) {
+        size = strlen(token);
+        if (is_first) {
+            is_first = 0;
+            // get path
+            char *s1 = strstr(token, " ");
+            char *s2 = strstr(s1 + 1, " ");
+            size = s2 - s1 - 1;
+            path = strndup(s1 + 1, size);
+
+            if (strcmp(GETJOBCMD, path) == 0) {
+                break;
+            } else {
+                // get priority
+                s1 = strstr(path, "/");
+                s2 = strstr(s1 + 1, "/");
+                size = s2 - s1 - 1;
+                char *p = strndup(s1 + 1, size);
+                priority = atoi(p);
+            }
+        } else {
+            char *value = strstr(token, ":");
+            if (value) {
+                size = value - token - 1;  // -1 for space
+                if (strncmp("Delay", token, size) == 0) {
+                    delay = atoi(value + 2);  // skip `: `
+                }
+            }
+        }
+        token = strtok(NULL, "\r\n");
+    }
+    
+
+    request->buffer = strdup(buffer); 
+    request->path = strdup(path); 
+    request->priority = priority;
+    request->fd = fd;
+    request->delay = delay; 
+
+    
+
+    free(read_buffer);
+    return request;
+}
+
+
 
 #endif
+
