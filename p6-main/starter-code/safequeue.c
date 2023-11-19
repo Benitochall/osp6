@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#define QUEUE_FULL_LOCAL -1 // Local definition for queue full
+
 // Helper function to swap two nodes
 void swap(QueueNode *a, QueueNode *b)
 {
@@ -58,16 +60,16 @@ int extract_priority(const char *path)
 }
 
 // Function to add work to the queue (heap)
-int add_work(SafeQueue *queue, const char *request_path, int client_fd, char * buffer, int priority, int delay)
+int add_work(SafeQueue *queue, const char *request_path, int client_fd, char *buffer, int priority, int delay)
 {
-    printf("Going into add work\n"); 
-    printf("In add work requestPath is %s\n", request_path); 
-    printf("In add work fd is %d\n", client_fd); 
-    printf("In add work buffer len is %ld\n", strlen(buffer)); 
-    printf("In add work priority is %d\n", priority); 
-    printf("In add work delay is %d\n", delay); 
-    printf("---------------\n"); 
-    // printf("client fd is %d\n", client_fd); 
+    // printf("Going into add work\n");
+    // printf("In add work requestPath is %s\n", request_path);
+    // printf("In add work fd is %d\n", client_fd);
+    // printf("In add work buffer len is %ld\n", strlen(buffer));
+    // printf("In add work priority is %d\n", priority);
+    // printf("In add work delay is %d\n", delay);
+    // printf("---------------\n");
+    // printf("client fd is %d\n", client_fd);
     // printf("Client's Request in add work:\n");
     // int i;
     // for (i = 0; i < strlen(buffer); ++i) {
@@ -81,25 +83,21 @@ int add_work(SafeQueue *queue, const char *request_path, int client_fd, char * b
     // }
     // printf("End of Client's Request in add work\n");
 
-
     pthread_mutex_lock(&queue->mutex);
 
+    // Check if the queue is full
     if (queue->size >= queue->capacity)
     {
-        if (resize_heap(queue) != 0)
-        {
-            // Handle the failure to resize
-            pthread_mutex_unlock(&queue->mutex);
-            return -1;
-        }
+        pthread_mutex_unlock(&queue->mutex);
+        return QUEUE_FULL_LOCAL;
     }
 
     // Create a new QueueNode with extracted priority
     QueueNode node;
     node.request_path = strdup(request_path); // Allocate and copy the path
-    node.buffer = strdup(buffer); // add the buffer to the node
-    node.priority = priority; 
-    node.client_fd = client_fd; 
+    node.buffer = strdup(buffer);             // add the buffer to the node
+    node.priority = priority;
+    node.client_fd = client_fd;
     node.delay = delay;
 
     // Add new node at the end of the heap
@@ -116,7 +114,7 @@ int add_work(SafeQueue *queue, const char *request_path, int client_fd, char * b
     queue->size++;
     pthread_cond_signal(&queue->cond); // Signal any waiting worker threads
     pthread_mutex_unlock(&queue->mutex);
-    return 1; 
+    return 1;
 }
 
 // Function to get the highest priority work (heap root). Is used when a thread can afford to wait for work to become available. This is common in worker threads that have nothing else to do but process requests.
@@ -174,7 +172,7 @@ QueueNode get_work_nonblocking(SafeQueue *queue)
     if (queue->size == 0)
     {
         pthread_mutex_unlock(&queue->mutex);
-        return (QueueNode){ .client_fd = -1 }; // Return an empty node to indicate queue is empty
+        return (QueueNode){.client_fd = -1}; // Return an empty node to indicate queue is empty
     }
 
     QueueNode node = queue->nodes[0];
@@ -228,6 +226,7 @@ void destroy_queue(SafeQueue *queue)
         free(queue);
     }
 }
-int get_size(SafeQueue *queue){
-    return queue->size; 
+int get_size(SafeQueue *queue)
+{
+    return queue->size;
 }
