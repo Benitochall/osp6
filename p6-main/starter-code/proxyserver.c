@@ -46,10 +46,6 @@ pthread_cond_t empty = PTHREAD_COND_INITIALIZER;
 pthread_cond_t fill = PTHREAD_COND_INITIALIZER;
 
 // a struct for the thread data 
-struct ThreadData {
-    int listener_port;
-    int server_fd;
-};
 
 void send_error_response(int client_fd, status_code_t err_code, char *err_msg) {
     http_start_response(client_fd, err_code);
@@ -65,7 +61,7 @@ void send_error_response(int client_fd, status_code_t err_code, char *err_msg) {
  * forward the client request to the fileserver and
  * forward the fileserver response to the client
  */
-void serve_request(int client_fd) {
+void serve_request(int client_fd, char * buff_string) {
 
 
     // this is the consumer
@@ -102,8 +98,9 @@ void serve_request(int client_fd) {
     char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
 
     // forward the client request to the fileserver
-    int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
-    int ret = http_send_data(fileserver_fd, buffer, bytes_read);
+    // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
+
+    int ret = http_send_data(fileserver_fd, buff_string, strlen(buff_string));
     if (ret < 0) {
         printf("Failed to send request to the file server\n");
         send_error_response(client_fd, BAD_GATEWAY, "Bad Gateway");
@@ -122,24 +119,50 @@ void serve_request(int client_fd) {
     }
 
     // close the connection to the fileserver
+    free(buffer); 
     shutdown(fileserver_fd, SHUT_WR);
     close(fileserver_fd);
+    close(client_fd); 
 
     // Free resources and exit
-    free(buffer);
+    printf("are we exiting the function\n"); 
+
 }
 
+void handle_get_job_request(int client_fd, SafeQueue* queue) {
+    QueueNode node = get_work_nonblocking(queue); // gets the node from the queue
 
+
+    if (get_size(queue) == 0) {
+        // The queue is empty, send an error response
+        //printf("here we made it");
+        char buf[50]; 
+        sprintf(buf, "The Queue is empty"); 
+        // need to send the error message
+        // need and error code and and error message
+        send_error_response(client_fd, QUEUE_EMPTY, buf); 
+        close(client_fd); 
+        return; 
+    } else {
+        char buf[512]; 
+        sprintf(buf, "%s\n", node.request_path); 
+        send_error_response(client_fd, OK, buf); 
+        close(client_fd); 
+        return; 
+    }
+}
 int server_fd; // this is a file descriptor for the server_fd
 /*
  * opens a TCP stream socket on all interfaces with port number PORTNO. Saves
  * the fd number of the server socket in *socket_number. For each accepted
  * connection, calls request_handler with the accepted fd number.
  */
-void serve_forever(int *server_fd) {
+void *serve_forever(void* listener) {
     // this is the producer thread
 
-    struct http_request *rec = NULL; 
+    struct http_client_request *rec = NULL;
+    struct ThreadListener *l_curr = (struct ThreadListener *)listener;
+    int *server_fd = &(l_curr->server_fd);
 
     // create a socket to listen
     *server_fd = socket(PF_INET, SOCK_STREAM, 0); // 
@@ -197,61 +220,52 @@ void serve_forever(int *server_fd) {
                inet_ntoa(client_address.sin_addr),
                client_address.sin_port);
 
-        // add the request to the pq 
-        // char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
-
-        // // forward the client request to the fileserver
-        // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
-
-        // if (bytes_read > 0) {
-        // // Print the client's request line by line
-        // printf("Client's Request:\n");
-        // int i;
-        // for (i = 0; i < bytes_read; ++i) {
-        //     // Print each character until a newline character is encountered
-        //     if (buffer[i] != '\n') {
-        //         putchar(buffer[i]);
-        //     } else {
-        //         // If a newline character is encountered, print a newline
-        //         putchar('\n');
-        //     }
-        // }
-        //     printf("End of Client's Request\n");
-        // }
-
-        char *buffer = (char *)malloc(RESPONSE_BUFSIZE * sizeof(char));
-
-        // forward the client request to the fileserver
-        // int bytes_read = read(client_fd, buffer, RESPONSE_BUFSIZE);
-        recv(client_fd, buffer, RESPONSE_BUFSIZE, MSG_PEEK); 
         
-        rec = http_request_parse(client_fd); 
+        printf("before rec\n"); 
+        rec = parse_client_request(client_fd);  // this should parse the data for us
 
-        printf("The path is %s\n", rec->path); 
-        printf("The method is %s\n", rec->method); 
-        printf("The delay is %s\n", rec->delay); 
+        printf("rec path is %s\n", rec->path); 
+        printf("rec delay is %d\n", rec->delay); 
+        printf("rec fd is %d\n", rec->fd); 
+        printf("rec buffer size is %ld\n", strlen(rec->buffer));
+        printf("rec priority is %d\n", rec->priority);
+        printf("------------------\n");
 
-        // need to parse all this data and get it onto the pq 
-        // GET /1/dummy1.html HTTP/1.1
-        // Host: localhost:33489
-        // User-Agent: curl/7.81.0
-        // Accept: */*
-        //TODO: need to add the client FD to the pq as well
-        add_work(pq, rec->path, client_fd); // adding the work to the buffer
 
-        // after adding work we need to A
-        // Is this where I want to start my listeners 
+        if (rec == NULL) {
+            perror("Error with parsing request\n"); 
+            close(client_fd); 
+            continue; 
+        }
 
-        // need to signal the listening threads 
-        //serve_request(client_fd);
+        // need to parse the buffer to get the path, the method and the delay
+
+        if (strcmp(rec->path, GETJOBCMD) == 0) {
+        // This is a GetJob request
+        // Call a function to handle this specific request
+            handle_get_job_request(client_fd, pq); // Assuming myQueue is your priority queue
+            free(rec); 
+            continue; 
+        }
+        else {
+            // here I want to pass a queuenode object
+            int check_add = add_work(pq, rec->path, rec->fd, rec->buffer, rec->priority, rec->delay); // need to change the sturct
+            if (check_add < 0){
+                // we failed to add the work 
+                char buf[256];
+                sprintf(buf, "Queue is full"); 
+                send_error_response(client_fd, QUEUE_FULL, buf); 
+                close(client_fd); 
+            }
+            free(rec); 
+        }
 
         // close the connection to the client
-        shutdown(client_fd, SHUT_WR);
-        close(client_fd);
     }
 
     shutdown(*server_fd, SHUT_RDWR);
     close(*server_fd);
+    return NULL; 
 }
 
 /*
@@ -299,29 +313,26 @@ void exit_with_usage() {
     exit(EXIT_SUCCESS);
 }
 
-// a method to create a thread 
-void* listener_call(void* arg) {
-    struct ThreadData* thread_data = (struct ThreadData*)arg;
-
-    // this is like our producer consumer model
-    serve_forever(&(thread_data->server_fd));
-
-    return NULL;
-}
 void* worker_call(void* arg) {
     SafeQueue* queue = (SafeQueue*)arg;
 
     while (1) {  // You might want a mechanism to break out of this loop
         QueueNode node = get_work(queue);
 
-        printf("the request path from get work is %s\n", node.request_path); 
-
-        if (node.request_path != NULL) {
+        if (node.priority != -1) {
             // Process the request using serve_request
-            serve_request(node.client_fd);  // Assuming serve_request takes a client_fd
+            // check to see if there is a delay 
+            if (node.delay >0){
+                sleep(node.delay); 
+            }
+
+            serve_request(node.client_fd, node.buffer);  // Assuming serve_request takes a client_fd
+            shutdown(node.client_fd, SHUT_WR);
+            close(node.client_fd);
 
             // If node.request_path is dynamically allocated, remember to free it
             free(node.request_path);
+            free(node.buffer); 
         }
 
         // Check for a shutdown condition here
@@ -369,13 +380,17 @@ int main(int argc, char **argv) {
 
     // create the thread IDs
     pthread_t* listener_ids = (pthread_t*)malloc(num_listener * sizeof(pthread_t)); // create as many threadIDs as we need
+    int* listener_server_fds = (int *)malloc(num_listener * sizeof(int)); 
+
 
     for (int j = 0; j < num_listener; j++) {
-        struct ThreadData* thread_data = (struct ThreadData*)malloc(sizeof(struct ThreadData)); // create a theadData struct
-        thread_data->server_fd = -1;
+        struct ThreadListener* l1 = (struct ThreadListener*)malloc(sizeof(struct ThreadListener)); // create a theadData struct
+        l1->server_fd = listener_server_fds[j];
+        l1->listener_port = listener_ports[j]; 
+        l1->thread_id = j; 
 
         // Create the thread
-        if (pthread_create(&listener_ids[j], NULL, listener_call, (void*)thread_data) != 0) { // creates a thread for each listener
+        if (pthread_create(&listener_ids[j], NULL, serve_forever, (void*)l1) != 0) { // creates a thread for each listener
             perror("Failed to create thread");
             exit(EXIT_FAILURE);
         }
